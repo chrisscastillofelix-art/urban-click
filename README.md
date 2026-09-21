@@ -18,3 +18,4 @@ Estructura corregida para Pages Functions:
 - Database: urban-click-db
 
 No requiere AUTH_SECRET ni R2.
+REDEPLOY
