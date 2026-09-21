@@ -1,11 +1,20 @@
-# URBAN CLICK · Cloudflare D1
+# URBAN CLICK - Cloudflare Pages + D1
 
-Version centralizada sin R2 y sin AUTH_SECRET.
+Estructura corregida para Pages Functions:
 
-- D1: usuarios, sesiones, tallas, stocks, prendas, ventas y fotografias.
-- Pages Functions: API y autenticacion.
-- GitHub + Cloudflare Pages: publicacion.
-- Sesiones: tokens aleatorios guardados en D1.
+- `public/` = archivos estáticos que Cloudflare publica.
+- `functions/` = backend Pages Functions, fuera de `public/`.
+- `schema.sql` y migraciones = configuración de D1.
 
-Para una base ya creada, ejecuta `MIGRACION_SESIONES.sql`.
-Acceso inicial: `admin` / `admin`.
+## Configuración Cloudflare Pages
+- Framework preset: None
+- Build command: `exit 0`
+- Build output directory: `public`
+- Root directory: dejar vacío
+
+## Binding
+- D1 database
+- Variable name: `DB`
+- Database: urban-click-db
+
+No requiere AUTH_SECRET ni R2.
