@@ -53,6 +53,120 @@ async function bumpRevision(DB){
 }
 function imageUrl(id){ return `/api/image?id=${encodeURIComponent(id)}`; }
 
+
+async function ensureSchema(DB){
+  const statements = [
+    DB.prepare(`CREATE TABLE IF NOT EXISTS app_meta (
+      id INTEGER PRIMARY KEY CHECK (id = 1),
+      revision INTEGER NOT NULL DEFAULT 0,
+      updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    )`),
+    DB.prepare(`INSERT OR IGNORE INTO app_meta (id, revision) VALUES (1, 0)`),
+    DB.prepare(`CREATE TABLE IF NOT EXISTS users (
+      id TEXT PRIMARY KEY,
+      nombre TEXT NOT NULL,
+      usuario TEXT NOT NULL UNIQUE,
+      password_hash TEXT NOT NULL,
+      password_salt TEXT NOT NULL,
+      rol TEXT NOT NULL CHECK (rol IN ('ADMIN','VISITA')),
+      activo INTEGER NOT NULL DEFAULT 1,
+      creado TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    )`),
+    DB.prepare(`CREATE TABLE IF NOT EXISTS sessions (
+      id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL,
+      token_hash TEXT NOT NULL UNIQUE,
+      expires_at TEXT NOT NULL,
+      creado TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    )`),
+    DB.prepare(`CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions(user_id)`),
+    DB.prepare(`CREATE INDEX IF NOT EXISTS idx_sessions_expiry ON sessions(expires_at)`),
+    DB.prepare(`CREATE TABLE IF NOT EXISTS tallas (
+      id TEXT PRIMARY KEY,
+      nombre TEXT NOT NULL UNIQUE,
+      tipo TEXT NOT NULL,
+      creado TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    )`),
+    DB.prepare(`CREATE TABLE IF NOT EXISTS stocks (
+      id TEXT PRIMARY KEY,
+      nombre TEXT NOT NULL,
+      fecha TEXT NOT NULL,
+      cantidad INTEGER NOT NULL,
+      costo_total REAL NOT NULL DEFAULT 0,
+      costo_unitario REAL NOT NULL DEFAULT 0,
+      proveedor TEXT NOT NULL DEFAULT '',
+      proveedor_celular TEXT NOT NULL DEFAULT '',
+      proveedor_ciudad TEXT NOT NULL DEFAULT '',
+      proveedor_detalle TEXT NOT NULL DEFAULT '',
+      observaciones TEXT NOT NULL DEFAULT '',
+      creado TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    )`),
+    DB.prepare(`CREATE INDEX IF NOT EXISTS idx_stocks_fecha ON stocks(fecha)`),
+    DB.prepare(`CREATE TABLE IF NOT EXISTS prendas (
+      id TEXT PRIMARY KEY,
+      stock_id TEXT NOT NULL,
+      detalle TEXT NOT NULL,
+      marca TEXT NOT NULL DEFAULT '',
+      color TEXT NOT NULL DEFAULT '',
+      genero TEXT NOT NULL DEFAULT 'MUJER',
+      talla TEXT NOT NULL DEFAULT '',
+      costo_unitario REAL NOT NULL DEFAULT 0,
+      precio_venta REAL NOT NULL DEFAULT 0,
+      estado_prenda TEXT NOT NULL DEFAULT 'DISPONIBLE',
+      creado TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    )`),
+    DB.prepare(`CREATE INDEX IF NOT EXISTS idx_prendas_stock ON prendas(stock_id)`),
+    DB.prepare(`CREATE INDEX IF NOT EXISTS idx_prendas_estado ON prendas(estado_prenda)`),
+    DB.prepare(`CREATE INDEX IF NOT EXISTS idx_prendas_talla ON prendas(talla)`),
+    DB.prepare(`CREATE TABLE IF NOT EXISTS ventas (
+      id TEXT PRIMARY KEY,
+      prenda_id TEXT NOT NULL,
+      stock_id TEXT NOT NULL,
+      cliente TEXT NOT NULL,
+      celular TEXT NOT NULL DEFAULT '',
+      fecha_venta TEXT NOT NULL,
+      fecha_entrega TEXT NOT NULL DEFAULT '',
+      estado_entrega TEXT NOT NULL DEFAULT 'ENTREGADO',
+      metodo_pago TEXT NOT NULL DEFAULT 'EFECTIVO',
+      precio_venta REAL NOT NULL DEFAULT 0,
+      costo_unitario REAL NOT NULL DEFAULT 0,
+      margen REAL NOT NULL DEFAULT 0,
+      creado TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    )`),
+    DB.prepare(`CREATE UNIQUE INDEX IF NOT EXISTS idx_ventas_prenda_unique ON ventas(prenda_id)`),
+    DB.prepare(`CREATE INDEX IF NOT EXISTS idx_ventas_fecha ON ventas(fecha_venta)`),
+    DB.prepare(`CREATE INDEX IF NOT EXISTS idx_ventas_stock ON ventas(stock_id)`),
+    DB.prepare(`CREATE INDEX IF NOT EXISTS idx_ventas_cliente ON ventas(cliente)`),
+    DB.prepare(`CREATE TABLE IF NOT EXISTS garment_images (
+      id TEXT PRIMARY KEY,
+      prenda_id TEXT NOT NULL,
+      file_name TEXT NOT NULL,
+      mime_type TEXT NOT NULL DEFAULT 'image/jpeg',
+      size_bytes INTEGER NOT NULL DEFAULT 0,
+      image_data BLOB NOT NULL,
+      creado TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    )`),
+    DB.prepare(`CREATE INDEX IF NOT EXISTS idx_images_prenda ON garment_images(prenda_id)`)
+  ];
+  await DB.batch(statements);
+  const sizes=[['SZ-XS','XS','LETRA'],['SZ-S','S','LETRA'],['SZ-M','M','LETRA'],['SZ-L','L','LETRA'],['SZ-XL','XL','LETRA'],['SZ-XXL','XXL','LETRA'],['SZ-34','34','NUMERICA'],['SZ-36','36','NUMERICA'],['SZ-38','38','NUMERICA'],['SZ-40','40','NUMERICA'],['SZ-42','42','NUMERICA']];
+  const sizeStatements=sizes.map(x=>DB.prepare(`INSERT OR IGNORE INTO tallas(id,nombre,tipo,creado,updated_at) VALUES(?,?,?,CURRENT_TIMESTAMP,CURRENT_TIMESTAMP)`).bind(...x));
+  await DB.batch(sizeStatements);
+}
+
+async function schemaStatus(DB){
+  const required=['app_meta','users','sessions','tallas','stocks','prendas','ventas','garment_images'];
+  const r=await DB.prepare(`SELECT name FROM sqlite_master WHERE type='table'`).all();
+  const names=new Set((r.results||[]).map(x=>x.name));
+  const missing=required.filter(x=>!names.has(x));
+  return {ok:missing.length===0,missing};
+}
+
 async function ensureFixedAdmin(DB){
   const salt='URBANCLICKADMIN2026';
   const hash=await sha256(`${salt}:ADMIN`);
@@ -64,6 +178,7 @@ async function ensureFixedAdmin(DB){
 
 async function handleLogin(context){
   if(!context.env.DB) return json({error:'D1_NO_VINCULADA',message:'FALTA EL BINDING DB EN CLOUDFLARE PAGES'},500);
+  try{ await ensureSchema(context.env.DB); }catch(err){ return json({error:'BASE_NO_INICIALIZADA',message:'NO SE PUDO PREPARAR LA BASE D1',detail:String(err?.message||err)},500); }
   const body=await context.request.json().catch(()=>({})); const usuario=clean(body.usuario), clave=clean(body.clave);
   if(!usuario||!clave) return json({error:'DATOS_INCOMPLETOS'},400);
   // La cuenta fija solicitada por la propietaria se repara automaticamente si la base viene de una version anterior.
@@ -97,6 +212,7 @@ async function handleLogout(context){
 
 async function handleBootstrap(context){
   const a=await requireSession(context); if(a.error) return a.error; const DB=context.env.DB;
+  try{ await ensureSchema(DB); }catch(err){ return json({error:'BASE_NO_INICIALIZADA',message:'NO SE PUDO PREPARAR LA BASE D1',detail:String(err?.message||err)},500); }
   const meta=await DB.prepare("SELECT revision FROM app_meta WHERE id=1").first(); const revision=Number(meta?.revision||0);
   const etag=`\"uc-${revision}\"`; if(context.request.headers.get('if-none-match')===etag) return new Response(null,{status:304,headers:{etag,'cache-control':'no-store'}});
   const queries=[
@@ -201,7 +317,7 @@ export async function onRequest(context){
     if(route==='images'&&method==='POST') return handleImageUpload(context);
     if(route==='image'&&method==='GET') return handleImageGet(context);
     if(route==='reset'&&method==='POST') return handleReset(context);
-    if(route==='health') return json({ok:true,service:'URBAN CLICK API',db:Boolean(context.env.DB),sessions:'D1'});
+    if(route==='health'){ if(!context.env.DB) return json({ok:true,service:'URBAN CLICK API',db:false,sessions:'D1',schema:false}); try{ await ensureSchema(context.env.DB); const st=await schemaStatus(context.env.DB); return json({ok:true,service:'URBAN CLICK API',db:true,sessions:'D1',schema:st.ok,missing:st.missing}); }catch(err){ return json({ok:false,service:'URBAN CLICK API',db:true,sessions:'D1',schema:false,error:String(err?.message||err)},500); } }
     return json({error:'NO_ENCONTRADO'},404);
   }catch(err){ return json({error:'SERVER_ERROR',message:String(err?.message||err)},500); }
 }
